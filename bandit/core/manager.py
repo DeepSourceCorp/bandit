@@ -20,7 +20,7 @@ from bandit.core import meta_ast as b_meta_ast
 from bandit.core import metrics
 from bandit.core import node_visitor as b_node_visitor
 from bandit.core import test_set as b_test_set
-
+from bandit.core.timeout import timeout, BanditTimeoutError
 
 LOG = logging.getLogger(__name__)
 NOSEC_COMMENT = re.compile(r"#\s*nosec:?\s*(?P<tests>[^#]+)?#?")
@@ -286,7 +286,7 @@ class BanditManager:
                     self._parse_file("<stdin>", fdata, new_files_list)
                 else:
                     with open(fname, "rb") as fdata:
-                        self._parse_file(fname, fdata, new_files_list)
+                        timeout(self._parse_file, fname, fdata, new_files_list)
             except OSError as e:
                 self.skipped.append((fname, e.strerror))
                 new_files_list.remove(fname)
@@ -352,6 +352,8 @@ class BanditManager:
                 (fname, "syntax error while parsing AST from file")
             )
             new_files_list.remove(fname)
+        except BanditTimeoutError:
+            LOG.info("Timed out checking file %s", fname)
         except Exception as e:
             LOG.error(
                 "Exception occurred when executing tests against "
