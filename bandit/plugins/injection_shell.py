@@ -34,7 +34,7 @@ def expression_returns_constant(expr):
       non deterministic if the `func` attribute for eg. is a `Name` node.
       A node like `('foo' + 'bar')()` is constant as it doesn't contain a `Name` node.
 
-    - `ctx=Load()` and `ctx=Del()` Names don't return a variable value. They only set
+    - `ctx=Store()` and `ctx=Del()` Names don't return a variable value. They only set
       or delete it. For eg. code `(x := 5)`, the `NamedExpr` contains an `Name` node,
       but it still only returns a constant value `5`.
     """
