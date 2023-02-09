@@ -77,7 +77,7 @@ def expression_returns_constant(expr):
         ):
             return all(
                 expression_returns_constant(child)
-                for child in ast.walk(expr.generators[0].iter)
+                for child in ast.iter_child_nodes(expr.generators[0].iter)
                 # To prevent infinite recursion
                 if child is not expr
             )
@@ -94,7 +94,7 @@ def expression_returns_constant(expr):
     # Check all the children of all other nodes, like `ListComp`, `Compare`, etc.
     return all(
         expression_returns_constant(child)
-        for child in ast.walk(expr)
+        for child in ast.iter_child_nodes(expr)
         # To prevent infinite recursion
         if child is not expr
     )
