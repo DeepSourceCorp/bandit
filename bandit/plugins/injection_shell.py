@@ -15,13 +15,103 @@ from bandit.core import test_properties as test
 full_path_match = re.compile(r"^(?:[A-Za-z](?=\:)|[\\\/\.])")
 
 
-def _evaluate_shell_call(context):
-    no_formatting = isinstance(context.node.args[0], ast.Str)
+def expression_returns_constant(expr):
+    """
+    Returns True if we can determine that the expr always returns a constant value.
 
-    if no_formatting:
-        return bandit.LOW
+    i.e., if the expr is a function call we can't determine the value, but if it's
+    a number we know it's returns value.
+
+    In case of a ternary `123 if foo() else 456`, even though it contains a function
+    call, the return value is always constant. So this will return True as well, for eg.
+
+    * In case of `[str(i) for i in (1, 2, 3)]`, the values may seem deterministic, but
+    `str` can be changed. So we don't handle this edge case.
+
+    ** NOTE: This only checks for the presence of a `Name` nodes with `ctx=Load`, as:
+
+    - Nodes like `Call` or `Attribute` aren't automatically non-constant. They're only
+      non deterministic if the `func` attribute for eg. is a `Name` node.
+      A node like `('foo' + 'bar')()` is constant as it doesn't contain a `Name` node.
+
+    - `ctx=Store()` and `ctx=Del()` Names don't return a variable value. They only set
+      or delete it. For eg. code `(x := 5)`, the `NamedExpr` contains an `Name` node,
+      but it still only returns a constant value `5`.
+    """
+    # To make recursion simpler. If no node received, assume base case of constant.
+    if expr is None:
+        return True
+
+    # These are always constant
+    if isinstance(expr, 
+        (
+            ast.Constant,
+            ast.NameConstant,
+            ast.Str,
+            ast.Num,
+            ast.Bytes,
+            ast.Ellipsis,
+        )
+    ):
+        return True
+
+    # A name is the negative base case: if we see this, expression is NOT constant.
+    if isinstance(expr, ast.Name) and isinstance(expr.ctx, ast.Load):
+        return False
+
+    # Don't check the condition `test`, as that is never returned.
+    if isinstance(expr, ast.IfExp):
+        return (
+            expression_returns_constant(expr.body)
+            and expression_returns_constant(expr.orelse)
+        )
+
+    # Only check the elements being added to the comprehensions.
+    if isinstance(expr, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
+        # If it is `x for x in ...`, then check the iterator.
+        if (
+            isinstance(expr.elt, ast.Name)
+            and len(expr.generators) == 1
+            and isinstance(expr.generators[0].target, ast.Name)
+            and expr.generators[0].target.id == expr.elt.id
+        ):
+            return all(
+                expression_returns_constant(child)
+                for child in ast.iter_child_nodes(expr.generators[0].iter)
+                # To prevent infinite recursion
+                if child is not expr
+            )
+
+        # Otherwise, just check the elements part, if it contains any variable.
+        return expression_returns_constant(expr.elt)
+    
+    if isinstance(expr, ast.DictComp):
+        return (
+            expression_returns_constant(expr.key)
+            and expression_returns_constant(expr.value)
+        )
+
+    # Check all the children of all other nodes, like `ListComp`, `Compare`, etc.
+    return all(
+        expression_returns_constant(child)
+        for child in ast.iter_child_nodes(expr)
+        # To prevent infinite recursion
+        if child is not expr
+    )
+
+
+
+def _evaluate_shell_call(context):
+    """
+    DeepSource modified: Don't raise this issue if the return values to the shell call
+    are all constant, as there is no risk of shell injection.
+    """
+    is_constant = expression_returns_constant(context.node.args[0])
+
+    if is_constant:
+        return False, bandit.LOW
     else:
-        return bandit.HIGH
+        return True, bandit.HIGH
 
 
 def gen_config(name):
@@ -202,7 +292,10 @@ def subprocess_popen_with_shell_equals_true(context, config):
     if config and context.call_function_name_qual in config["subprocess"]:
         if has_shell(context):
             if len(context.call_args) > 0:
-                sev = _evaluate_shell_call(context)
+                should_raise, sev = _evaluate_shell_call(context)
+                if not should_raise:
+                    return None
+
                 if sev == bandit.LOW:
                     return bandit.Issue(
                         severity=bandit.LOW,
@@ -476,7 +569,10 @@ def start_process_with_a_shell(context, config):
     """  # noqa: E501
     if config and context.call_function_name_qual in config["shell"]:
         if len(context.call_args) > 0:
-            sev = _evaluate_shell_call(context)
+            should_raise, sev = _evaluate_shell_call(context)
+            if not should_raise:
+                return None
+
             if sev == bandit.LOW:
                 return bandit.Issue(
                     severity=bandit.LOW,
